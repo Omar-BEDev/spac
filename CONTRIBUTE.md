@@ -7,8 +7,9 @@ Below is some information on how to contribute.
 2 - Write function names that are **clear**, concise, and not too long.<br>
 3 - Writing tests for each feature or fix that is added use `go test`. <br>
 4 - Ensuring that all tests have been passed is a prerequisite for accepting the contribution.<br>
-5 - Adding Comet messages with a specific template such as `type of commit(what is add or fix or refactor): explain what you do`<br>
-
+5 - Adding Commet messages with a specific template such as `type of commit(what is add or fix or refactor): explain what you do`<br>
+6 - Provide documentation for the exported functions to make it easier to understand their purpose.
+7 - Add comments to any unusual decision, refactoring, or solution to make it easier for other contributers to understand the reason behind your changes.
 ## AI 
-If you are using AI, you must follow the rules in the file to avoid any rejection of your contribution,
-and you must include an explanation in your withdrawal request of what the AI did and why you do not want technical debt. 
+If you are using AI, you must follow the rules in the file `AGENT.md` to avoid any rejection of your contribution,
+and you must include an explanation in your **pull request** of what the AI did and why you do not want **technical debt**. 
