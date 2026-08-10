@@ -1,0 +1,4 @@
+VERSION=v0.0.1
+
+run:
+	go run main.go 
