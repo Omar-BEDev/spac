@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "method": "get",
+      "url": "https://httpbin.org/get"
+    },
+    {
+      "method": "post",
+      "url": "https://httpbin.org/post",
+      "body": {
+        "name": "user write new name here",
+        "price": 0
+      }
+    },
+    {
+      "method": "put",
+      "url": "https://httpbin.org/put",
+      "body": {
+        "name": "user write new name here",
+        "price": 0
+      }
+    },
+    {
+      "method": "delete",
+      "url": "https://httpbin.org/delete"
+    }
+  ]
+}

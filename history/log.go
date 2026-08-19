@@ -1,9 +1,21 @@
+/*
+Copyright 2026 Omar-BEDev
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 // Package history provides a simple way to record user actions in a
 // local log file so the tool keeps a trace of what happened.
-//
-// This file was generated with the assistance of an artificial
-// intelligence coding agent (opencode). The decisions made here are
-// commented inline to make the reasoning behind them explicit.
 package history
 
 import (
@@ -23,7 +35,7 @@ const (
 //
 // Decision: relying on the executable directory keeps the log close to
 // the binary, which is predictable for CLI usage.
-var logFilePath = func() string {
+var defaultLogFilePath = func() string {
 	execPath, err := os.Executable()
 	if err != nil {
 		// Fall back to the current working directory if the executable
@@ -32,6 +44,23 @@ var logFilePath = func() string {
 	}
 	return filepath.Join(filepath.Dir(execPath), historyFileName)
 }()
+
+var logFilePath = defaultLogFilePath
+
+// SetLogFilePath overrides the history log file location so tests in other
+// packages (for example main) can point the log at a temporary file. Passing
+// an empty path restores the default location derived from the executable
+// directory.
+//
+// Decision: exported on purpose as a test seam; the real location logic stays
+// unexported in defaultLogFilePath.
+func SetLogFilePath(path string) {
+	if path == "" {
+		logFilePath = defaultLogFilePath
+		return
+	}
+	logFilePath = path
+}
 
 // LogEntry represents a single history log entry.
 type LogEntry struct {

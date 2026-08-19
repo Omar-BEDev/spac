@@ -27,6 +27,9 @@ go.work.sum
 # env file
 .env
 
+# agent working ledger
+agent1.md
+
 # Editor/IDE
 # .idea/
 # .vscode/

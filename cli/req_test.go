@@ -1,0 +1,206 @@
+/*
+Copyright 2026 Omar-BEDev
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package cli
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestIsReqCommand(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{name: "canonical", input: "new req \"https://a.com\"", want: true},
+		{name: "capital new", input: "New req \"https://a.com\"", want: true},
+		{name: "capital Req", input: "new Req \"https://a.com\"", want: true},
+		{name: "no link", input: "new req", want: true},
+		{name: "leading spaces", input: "   new Req \"https://a.com\"", want: true},
+		{name: "trailing spaces", input: "new req \"https://a.com\"   ", want: true},
+		{name: "empty", input: "", want: false},
+		{name: "whitespace only", input: "   ", want: false},
+		{name: "only req", input: "req", want: false},
+		{name: "other command", input: "login", want: false},
+	}
+	for _, tt := range tests {
+		if got := IsReqCommand(tt.input); got != tt.want {
+			t.Errorf("IsReqCommand(%q) = %v ; want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestParseReq(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           string
+		wantURL         string
+		wantMeths       []string
+		wantErr         bool
+		wantErrContains string
+	}{
+		{
+			name:      "defaults to post",
+			input:     `new req "https://a.com"`,
+			wantURL:   "https://a.com",
+			wantMeths: []string{"post"},
+		},
+		{
+			name:      "single method",
+			input:     `new req "https://a.com" -method(get)`,
+			wantURL:   "https://a.com",
+			wantMeths: []string{"get"},
+		},
+		{
+			name:      "many methods",
+			input:     `new req "https://a.com" -method(post,get,put,delete)`,
+			wantURL:   "https://a.com",
+			wantMeths: []string{"post", "get", "put", "delete"},
+		},
+		{
+			name:      "mixed case methods",
+			input:     `new req "https://a.com" -method(POST,Get)`,
+			wantURL:   "https://a.com",
+			wantMeths: []string{"post", "get"},
+		},
+		{
+			name:      "duplicates removed",
+			input:     `new req "https://a.com" -method(get,post,get)`,
+			wantURL:   "https://a.com",
+			wantMeths: []string{"get", "post"},
+		},
+		{
+			name:      "equal sign form",
+			input:     `new req "https://a.com" -method=delete`,
+			wantURL:   "https://a.com",
+			wantMeths: []string{"delete"},
+		},
+		{
+			name:      "unquoted link",
+			input:     "new req https://a.com -method(put)",
+			wantURL:   "https://a.com",
+			wantMeths: []string{"put"},
+		},
+		{
+			name:      "mixed method forms",
+			input:     `new req "https://a.com" -method=post -method(get,delete)`,
+			wantURL:   "https://a.com",
+			wantMeths: []string{"post", "get", "delete"},
+		},
+		{
+			name:      "duplicate method flags",
+			input:     `new req "https://a.com" -method(get) -method(get)`,
+			wantURL:   "https://a.com",
+			wantMeths: []string{"get"},
+		},
+		{
+			name:      "trailing spaces",
+			input:     `new req "https://a.com"   `,
+			wantURL:   "https://a.com",
+			wantMeths: []string{"post"},
+		},
+		{
+			name:      "leading spaces",
+			input:     `   new req "https://a.com"`,
+			wantURL:   "https://a.com",
+			wantMeths: []string{"post"},
+		},
+		{
+			name:      "realistic query link",
+			input:     `new req "https://api.example.com/v1/items?q=hello&page=2"`,
+			wantURL:   "https://api.example.com/v1/items?q=hello&page=2",
+			wantMeths: []string{"post"},
+		},
+		{
+			name:    "link with whitespace rejected",
+			input:   `new req "https://api.example.com/v1/items?q=a b"`,
+			wantErr: true,
+		},
+		{
+			name:    "empty input",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "whitespace only input",
+			input:   "     ",
+			wantErr: true,
+		},
+		{
+			name:            "unsupported scheme rejected",
+			input:           `new req "ftp://files.example.com/x.zip"`,
+			wantErr:         true,
+			wantErrContains: `unsupported api link scheme "ftp"`,
+		},
+		{
+			name:            "missing scheme rejected",
+			input:           `new req "api.example.com/items"`,
+			wantErr:         true,
+			wantErrContains: "missing a scheme",
+		},
+		{
+			name:    "missing link",
+			input:   "new req",
+			wantErr: true,
+		},
+		{
+			name:    "empty link",
+			input:   `new req ""`,
+			wantErr: true,
+		},
+		{
+			name:    "unsupported method",
+			input:   `new req "https://a.com" -method(patch)`,
+			wantErr: true,
+		},
+		{
+			name:    "empty method list",
+			input:   `new req "https://a.com" -method()`,
+			wantErr: true,
+		},
+		{
+			name:    "not a req command",
+			input:   "login",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseReq(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseReq(%q) expected error, got %+v", tt.input, got)
+				}
+				if tt.wantErrContains != "" && !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Errorf("ParseReq(%q) error = %q ; want it to contain %q", tt.input, err, tt.wantErrContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseReq(%q) unexpected error: %v", tt.input, err)
+			}
+			if got.URL != tt.wantURL {
+				t.Errorf("ParseReq(%q) URL = %q ; want %q", tt.input, got.URL, tt.wantURL)
+			}
+			if !reflect.DeepEqual(got.Methods, tt.wantMeths) {
+				t.Errorf("ParseReq(%q) Methods = %v ; want %v", tt.input, got.Methods, tt.wantMeths)
+			}
+		})
+	}
+}
