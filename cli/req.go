@@ -1,0 +1,175 @@
+package cli
+
+import (
+	"fmt"
+	"strings"
+	"unicode"
+)
+
+// This file was generated with the assistance of an artificial intelligence
+// coding agent (opencode). The parsing decisions are commented inline to
+// make the reasoning behind them explicit.
+
+// Request holds the parsed result of a "new req" command line.
+type Request struct {
+	URL     string
+	Methods []string
+}
+
+// allowedMethods lists the HTTP methods accepted by the -method(-) flag.
+// Decision: keep the set small and aligned with the existing command map.
+var allowedMethods = map[string]bool{
+	"post":   true,
+	"get":    true,
+	"put":    true,
+	"delete": true,
+}
+
+// IsReqCommand reports whether input is a "new req" command, ignoring
+// letter case so both "New req" and "new Req" are accepted from the console.
+// Decision: the existing command map uses exact matching, this looser check
+// is reserved for the interactive command line parser.
+func IsReqCommand(input string) bool {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	return lower == "new req" || strings.HasPrefix(lower, "new req ")
+}
+
+// ParseReq parses a "new req" command line. The grammar is:
+//
+//	spac>> new req "<api link>" [-method(post,get,put,delete)]
+//
+// The API link is required and may be quoted to allow spaces. The -method
+// flag is optional and defaults to "post" when omitted; each listed method
+// triggers one request and duplicates are executed only once.
+func ParseReq(input string) (*Request, error) {
+	trimmed := strings.TrimSpace(input)
+	if !IsReqCommand(trimmed) {
+		return nil, fmt.Errorf("not a new req command")
+	}
+
+	args := splitArgs(trimmed)
+	if len(args) < 3 {
+		return nil, fmt.Errorf("missing api link")
+	}
+
+	url := unquote(args[2])
+	if url == "" {
+		return nil, fmt.Errorf("api link cannot be empty")
+	}
+
+	req := &Request{URL: url}
+
+	var methods []string
+	haveMethods := false
+	for _, arg := range args[3:] {
+		parsed, ok, err := parseMethodArg(arg)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			haveMethods = true
+			methods = append(methods, parsed...)
+		}
+	}
+
+	if haveMethods {
+		req.Methods = dedupe(methods)
+	} else {
+		// Default decision: POST is the most common create/check verb.
+		req.Methods = []string{"post"}
+	}
+
+	return req, nil
+}
+
+// splitArgs splits a command line by whitespace while keeping double-quoted
+// sections together so the API link can contain spaces.
+func splitArgs(input string) []string {
+	var (
+		args    []string
+		current strings.Builder
+		inQuote bool
+	)
+	for _, r := range input {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+			current.WriteRune(r)
+		case unicode.IsSpace(r) && !inQuote:
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	return args
+}
+
+// unquote removes surrounding double quotes from a token when present.
+func unquote(token string) string {
+	if len(token) >= 2 && token[0] == '"' && token[len(token)-1] == '"' {
+		return token[1 : len(token)-1]
+	}
+	return token
+}
+
+// parseMethodArg recognises a "-method(...)" or "-method=..." flag and
+// returns the validated method list it carries. ok is false when the token
+// is not a method flag at all.
+func parseMethodArg(arg string) ([]string, bool, error) {
+	lower := strings.ToLower(arg)
+	var inner string
+	switch {
+	case strings.HasPrefix(lower, "-method(") && strings.HasSuffix(arg, ")"):
+		inner = arg[len("-method(") : len(arg)-1]
+	case strings.HasPrefix(lower, "-method="):
+		inner = arg[len("-method="):]
+	default:
+		return nil, false, nil
+	}
+	methods, err := parseMethods(strings.Split(inner, ","))
+	return methods, true, err
+}
+
+// parseMethods validates and normalises a list of raw method names. It
+// lowercases them, rejects anything outside the supported set, and removes
+// duplicates while preserving input order.
+func parseMethods(raw []string) ([]string, error) {
+	var methods []string
+	seen := make(map[string]bool)
+	for _, m := range raw {
+		m = strings.ToLower(strings.TrimSpace(m))
+		if m == "" {
+			continue
+		}
+		if !allowedMethods[m] {
+			return nil, fmt.Errorf("unsupported method %q", m)
+		}
+		if !seen[m] {
+			seen[m] = true
+			methods = append(methods, m)
+		}
+	}
+	if len(methods) == 0 {
+		return nil, fmt.Errorf("no methods provided")
+	}
+	return methods, nil
+}
+
+// dedupe removes duplicate strings preserving the first occurrence order.
+func dedupe(items []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, item := range items {
+		if !seen[item] {
+			seen[item] = true
+			out = append(out, item)
+		}
+	}
+	return out
+}
