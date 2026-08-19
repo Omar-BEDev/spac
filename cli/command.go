@@ -21,3 +21,10 @@ func IsAvailableCommand(name string) bool {
 	}
 	return false
 }
+
+// SupportedMethod reports whether name is one of the HTTP methods the console
+// can execute (post, get, put, delete). The check is case-sensitive the same
+// way the command map is; callers lower-case before asking when needed.
+func SupportedMethod(name string) bool {
+	return allowedMethods[name]
+}

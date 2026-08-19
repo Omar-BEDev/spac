@@ -1,0 +1,26 @@
+[
+  {
+    "method": "get",
+    "url": "https://httpbin.org/get"
+  },
+  {
+    "method": "post",
+    "url": "https://httpbin.org/post",
+    "body": {
+      "name": "user write new name here",
+      "description": "user write description"
+    }
+  },
+  {
+    "method": "put",
+    "url": "https://httpbin.org/put",
+    "body": {
+      "name": "user write new name here",
+      "description": "user write description"
+    }
+  },
+  {
+    "method": "delete",
+    "url": "https://httpbin.org/delete"
+  }
+]

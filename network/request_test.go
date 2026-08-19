@@ -5,6 +5,7 @@ package network
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -78,5 +79,47 @@ func TestSendNetworkFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "perform request") {
 		t.Errorf("Send() error = %q ; want it to mention %q", err, "perform request")
+	}
+}
+
+// TestSendWithBodySendsJSON verifies the JSON body is serialized verbatim on
+// the wire and that Content-Type is set to application/json.
+func TestSendWithBodySendsJSON(t *testing.T) {
+	const wantBody = `{"name":"user write new name here","description":"user write description"}`
+
+	var (
+		mu      sync.Mutex
+		gotBody []byte
+		gotCT   string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		gotBody = body
+		gotCT = r.Header.Get("Content-Type")
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	original := DefaultClient
+	DefaultClient = &http.Client{}
+	t.Cleanup(func() { DefaultClient = original })
+
+	status, err := SendWithBody("post", server.URL, []byte(wantBody))
+	if err != nil {
+		t.Fatalf("SendWithBody() unexpected error: %v", err)
+	}
+	if status != "200 OK" {
+		t.Errorf("SendWithBody() status = %q ; want %q", status, "200 OK")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if string(gotBody) != wantBody {
+		t.Errorf("SendWithBody() received body %q ; want %q", gotBody, wantBody)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("SendWithBody() Content-Type = %q ; want %q", gotCT, "application/json")
 	}
 }
