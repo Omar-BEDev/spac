@@ -1,3 +1,19 @@
+/*
+Copyright 2026 Omar-BEDev
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 // Package suite loads and validates "run -tests" files. A tests file is a
 // JSON document with a top-level "tests" tag holding the list of cases, each
 // describing one HTTP request to execute:
@@ -9,9 +25,6 @@
 //	    { "method": "get", "url": "https://api.example.com/health" }
 //	  ]
 //	}
-//
-// This file was generated with the assistance of an artificial intelligence
-// coding agent (opencode). Decisions are commented inline.
 package suite
 
 import (

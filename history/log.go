@@ -1,9 +1,21 @@
+/*
+Copyright 2026 Omar-BEDev
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 // Package history provides a simple way to record user actions in a
 // local log file so the tool keeps a trace of what happened.
-//
-// This file was generated with the assistance of an artificial
-// intelligence coding agent (opencode). The decisions made here are
-// commented inline to make the reasoning behind them explicit.
 package history
 
 import (
