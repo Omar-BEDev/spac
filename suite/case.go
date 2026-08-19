@@ -22,9 +22,16 @@ limitations under the License.
 //	  "tests": [
 //	    { "method": "post", "url": "https://api.example.com/users",
 //	      "body": { "name": "..." } },
-//	    { "method": "get", "url": "https://api.example.com/health" }
+//	    { "method": "get", "url": "https://api.example.com/health" },
+//	    { "method": "get", "url": "https://api.example.com/users/999",
+//	      "expected_status": 404 }
 //	  ]
 //	}
+//
+// A case passes when the request executes successfully. Whether the response
+// is a PASS also depends on expected_status: when it is set (non-zero), the
+// case passes only for that exact status; when it is omitted, the case passes
+// for any 2xx status.
 package suite
 
 import (
@@ -38,10 +45,14 @@ import (
 
 // Case is a single request to run from a tests file. Body is optional and,
 // when present, is kept as raw JSON so it is sent exactly as written.
+// ExpectedStatus is optional: when set (non-zero) the request is expected to
+// return exactly that HTTP status; when omitted the default expectation is
+// any 2xx response.
 type Case struct {
-	Method string          `json:"method"`
-	URL    string          `json:"url"`
-	Body   json.RawMessage `json:"body,omitempty"`
+	Method         string          `json:"method"`
+	URL            string          `json:"url"`
+	Body           json.RawMessage `json:"body,omitempty"`
+	ExpectedStatus int             `json:"expected_status,omitempty"`
 }
 
 // Parse validates raw tests-file JSON and returns its cases.

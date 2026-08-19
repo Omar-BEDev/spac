@@ -119,12 +119,15 @@ func TestSendWithBodySendsJSON(t *testing.T) {
 	DefaultClient = &http.Client{}
 	t.Cleanup(func() { DefaultClient = original })
 
-	status, err := SendWithBody("post", server.URL, []byte(wantBody))
+	status, code, err := SendWithBody("post", server.URL, []byte(wantBody))
 	if err != nil {
 		t.Fatalf("SendWithBody() unexpected error: %v", err)
 	}
 	if status != "200 OK" {
 		t.Errorf("SendWithBody() status = %q ; want %q", status, "200 OK")
+	}
+	if code != http.StatusOK {
+		t.Errorf("SendWithBody() code = %d ; want %d", code, http.StatusOK)
 	}
 
 	mu.Lock()
@@ -134,5 +137,42 @@ func TestSendWithBodySendsJSON(t *testing.T) {
 	}
 	if gotCT != "application/json" {
 		t.Errorf("SendWithBody() Content-Type = %q ; want %q", gotCT, "application/json")
+	}
+}
+
+// TestSendWithBodyReturnsNumericCode verifies the numeric status code is
+// returned alongside the printable status line for a non-2xx response too,
+// without being reported as a transport error.
+func TestSendWithBodyReturnsNumericCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/not-found" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	original := DefaultClient
+	DefaultClient = &http.Client{}
+	t.Cleanup(func() { DefaultClient = original })
+
+	status, code, err := SendWithBody("get", server.URL+"/not-found", nil)
+	if err != nil {
+		t.Fatalf("SendWithBody() unexpected error on 404 response: %v", err)
+	}
+	if status != "404 Not Found" {
+		t.Errorf("SendWithBody() status = %q ; want %q", status, "404 Not Found")
+	}
+	if code != http.StatusNotFound {
+		t.Errorf("SendWithBody() code = %d ; want %d", code, http.StatusNotFound)
+	}
+
+	status, code, err = SendWithBody("post", server.URL, []byte(`{"name":"a"}`))
+	if err != nil {
+		t.Fatalf("SendWithBody() unexpected error on 200 response: %v", err)
+	}
+	if status != "200 OK" || code != http.StatusOK {
+		t.Errorf("SendWithBody() = (%q, %d) ; want (\"200 OK\", %d)", status, code, http.StatusOK)
 	}
 }

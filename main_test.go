@@ -371,3 +371,100 @@ func TestHandleLineRunTestsFailure(t *testing.T) {
 		t.Errorf("history should be empty for failed cases, got %q", content)
 	}
 }
+
+// statusServer returns a minimal httptest server that answers every request
+// with the given status code, so non-2xx responses can be produced without a
+// real network call.
+func statusServer(t *testing.T, code int) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(code)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// TestHandleLineRunTestsWrongStatus verifies a case without expected_status
+// that receives a non-2xx response (404) prints FAIL, shows the actual code,
+// and is not counted in the PASS total.
+func TestHandleLineRunTestsWrongStatus(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "history.log")
+	history.SetLogFilePath(logPath)
+
+	server := statusServer(t, http.StatusNotFound)
+	path := filepath.Join(t.TempDir(), "tests.json")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"tests": [{"method": "get", "url": "%s/not-found"}]}`, server.URL)), 0o644); err != nil {
+		t.Fatalf("write tests file: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`run -tests "%s"`, path))
+	})
+	if !strings.Contains(out, "FAIL") {
+		t.Errorf("expected FAIL for non-2xx status, got %q", out)
+	}
+	if !strings.Contains(out, "404") {
+		t.Errorf("expected actual status 404 in output, got %q", out)
+	}
+	if got := strings.Count(out, "PASS"); got != 0 {
+		t.Errorf("wrong-status case must not count in PASS total, got %d PASS in %q", got, out)
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err == nil && strings.Contains(string(content), "run tests") {
+		t.Errorf("history should be empty for a wrong-status case, got %q", content)
+	}
+}
+
+// TestHandleLineRunTestsExpectedStatusMatches verifies a case with an
+// explicit expected_status set to a non-2xx value passes when the server
+// returns exactly that status, proving intentional non-2xx checks work.
+func TestHandleLineRunTestsExpectedStatusMatches(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "history.log")
+	history.SetLogFilePath(logPath)
+
+	server := statusServer(t, http.StatusNotFound)
+	path := filepath.Join(t.TempDir(), "tests.json")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"tests": [{"method": "get", "url": "%s/should-not-exist", "expected_status": 404}]}`, server.URL)), 0o644); err != nil {
+		t.Fatalf("write tests file: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`run -tests "%s"`, path))
+	})
+	if !strings.Contains(out, "PASS") {
+		t.Errorf("expected PASS for intentional 404 check, got %q", out)
+	}
+	if !strings.Contains(out, "404") {
+		t.Errorf("expected 404 in output, got %q", out)
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("failed to read history log: %v", err)
+	}
+	if !strings.Contains(string(content), "run tests get") {
+		t.Errorf("history log missing passing case, got %q", content)
+	}
+}
+
+// TestHandleLineRunTestsExpectedStatusMismatch verifies a case whose explicit
+// expected_status does not match the response prints a FAIL showing both the
+// wanted and the actual code.
+func TestHandleLineRunTestsExpectedStatusMismatch(t *testing.T) {
+	server := okServer(t)
+	path := filepath.Join(t.TempDir(), "tests.json")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"tests": [{"method": "get", "url": "%s/x", "expected_status": 404}]}`, server.URL)), 0o644); err != nil {
+		t.Fatalf("write tests file: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`run -tests "%s"`, path))
+	})
+	if !strings.Contains(out, "FAIL") {
+		t.Errorf("expected FAIL on expected_status mismatch, got %q", out)
+	}
+	if !strings.Contains(out, "want status 404 got 200") {
+		t.Errorf("expected want/got mismatch message, got %q", out)
+	}
+}
