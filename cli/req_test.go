@@ -81,10 +81,15 @@ func TestParseReq(t *testing.T) {
 			wantMeths: []string{"put"},
 		},
 		{
-			name:      "link with spaces",
-			input:     `new req "https://api.example.com/v1/items?q=a b"`,
-			wantURL:   "https://api.example.com/v1/items?q=a b",
+			name:      "realistic query link",
+			input:     `new req "https://api.example.com/v1/items?q=hello&page=2"`,
+			wantURL:   "https://api.example.com/v1/items?q=hello&page=2",
 			wantMeths: []string{"post"},
+		},
+		{
+			name:    "link with whitespace rejected",
+			input:   `new req "https://api.example.com/v1/items?q=a b"`,
+			wantErr: true,
 		},
 		{
 			name:    "missing link",

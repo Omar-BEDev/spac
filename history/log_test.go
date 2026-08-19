@@ -73,3 +73,28 @@ func TestLogLogin(t *testing.T) {
 		t.Errorf("expected log entry to contain %q, got %q", "login", string(content))
 	}
 }
+
+// TestSetLogFilePath verifies that SetLogFilePath redirects logging, and
+// that an empty path restores the default location.
+func TestSetLogFilePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	override := filepath.Join(tmpDir, historyFileName)
+	SetLogFilePath(override)
+
+	if err := LogLogin(); err != nil {
+		t.Fatalf("LogLogin() unexpected error: %v", err)
+	}
+
+	content, err := os.ReadFile(override)
+	if err != nil {
+		t.Fatalf("failed to read redirected log file: %v", err)
+	}
+	if !strings.Contains(string(content), "login") {
+		t.Errorf("expected redirected log entry to contain %q, got %q", "login", string(content))
+	}
+
+	SetLogFilePath("")
+	if logFilePath != defaultLogFilePath {
+		t.Errorf("SetLogFilePath(\"\") did not restore default path: got %q", logFilePath)
+	}
+}

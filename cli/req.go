@@ -38,9 +38,12 @@ func IsReqCommand(input string) bool {
 //
 //	spac>> new req "<api link>" [-method(post,get,put,delete)]
 //
-// The API link is required and may be quoted to allow spaces. The -method
-// flag is optional and defaults to "post" when omitted; each listed method
-// triggers one request and duplicates are executed only once.
+// The API link is required and may be double-quoted so the shell-style
+// tokenizer keeps it together. Links containing whitespace are rejected
+// because a raw space in an HTTP URL is not something a real server will
+// accept (the server replies 400). The -method flag is optional and
+// defaults to "post" when omitted; each listed method triggers one request
+// and duplicates are executed only once.
 func ParseReq(input string) (*Request, error) {
 	trimmed := strings.TrimSpace(input)
 	if !IsReqCommand(trimmed) {
@@ -55,6 +58,11 @@ func ParseReq(input string) (*Request, error) {
 	url := unquote(args[2])
 	if url == "" {
 		return nil, fmt.Errorf("api link cannot be empty")
+	}
+	// Decision: rather than silently percent-encoding the URL (which would
+	// hide user mistakes), fail fast with an explicit error.
+	if containsWhitespace(url) {
+		return nil, fmt.Errorf("api link contains whitespace")
 	}
 
 	req := &Request{URL: url}
@@ -116,6 +124,16 @@ func unquote(token string) string {
 		return token[1 : len(token)-1]
 	}
 	return token
+}
+
+// containsWhitespace reports whether s contains any Unicode space character.
+func containsWhitespace(s string) bool {
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseMethodArg recognises a "-method(...)" or "-method=..." flag and

@@ -4,14 +4,18 @@
 package network
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
 
 // TestSendMethods verifies Send performs a request with each supported HTTP
-// method and returns the response status line.
+// method and returns the exact status line produced by the server. The
+// status is the value the console prints to the user, so it must be asserted
+// rather than discarded.
 func TestSendMethods(t *testing.T) {
 	var (
 		mu      sync.Mutex
@@ -25,15 +29,18 @@ func TestSendMethods(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Point the shared client at the test server.
 	original := DefaultClient
 	DefaultClient = &http.Client{}
 	t.Cleanup(func() { DefaultClient = original })
 
 	wantMethods := []string{"POST", "GET", "PUT", "DELETE"}
 	for _, m := range wantMethods {
-		if _, err := Send(m, server.URL); err != nil {
+		status, err := Send(m, server.URL)
+		if err != nil {
 			t.Fatalf("Send(%q) unexpected error: %v", m, err)
+		}
+		if status != "200 OK" {
+			t.Errorf("Send(%q) status = %q ; want %q", m, status, "200 OK")
 		}
 	}
 
@@ -49,13 +56,27 @@ func TestSendMethods(t *testing.T) {
 	}
 }
 
-// TestSendInvalidURL verifies Send reports an error for an un-routable link.
-func TestSendInvalidURL(t *testing.T) {
+// failingTransport is a http.RoundTripper that always fails. It makes error
+// tests deterministic instead of relying on the state of a local port.
+type failingTransport struct{}
+
+func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("simulated network failure")
+}
+
+// TestSendNetworkFailure verifies Send surfaces the error wrapped with the
+// "perform request" context so callers can tell a request-execution failure
+// apart from a request-build failure.
+func TestSendNetworkFailure(t *testing.T) {
 	original := DefaultClient
-	DefaultClient = &http.Client{}
+	DefaultClient = &http.Client{Transport: failingTransport{}}
 	t.Cleanup(func() { DefaultClient = original })
 
-	if _, err := Send("get", "http://127.0.0.1:1/nope"); err == nil {
-		t.Error("Send() expected error for unreachable link, got nil")
+	_, err := Send("get", "http://example.com/x")
+	if err == nil {
+		t.Fatal("Send() expected error for failing transport, got nil")
+	}
+	if !strings.Contains(err.Error(), "perform request") {
+		t.Errorf("Send() error = %q ; want it to mention %q", err, "perform request")
 	}
 }
