@@ -112,7 +112,7 @@ func handleNewReq(line string) {
 
 		spinner := ui.NewSpinner(os.Stdout)
 		spinner.Start()
-		status, err := network.SendWithBody(method, req.URL, body)
+		status, _, err := network.SendWithBody(method, req.URL, body)
 		spinner.Stop()
 
 		if err != nil {
@@ -133,8 +133,13 @@ func handleNewReq(line string) {
 }
 
 // handleRunTests runs every case in a "run -tests" file, reusing the same
-// spinner and history logging as new req. A case passes when its request
-// executes and returns a response; the status line is printed alongside.
+// spinner and history logging as new req. After the request executes, a case
+// passes based on the response status:
+//
+//   - expected_status set: the case passes only for exactly that status;
+//   - expected_status omitted: the case passes for any 2xx status.
+//
+// A transport error (no response at all) is always a FAIL.
 func handleRunTests(line string) {
 	path, err := cli.ParseRunTests(line)
 	if err != nil {
@@ -151,7 +156,7 @@ func handleRunTests(line string) {
 	for i, tc := range cases {
 		spinner := ui.NewSpinner(os.Stdout)
 		spinner.Start()
-		status, err := network.SendWithBody(tc.Method, tc.URL, tc.Body)
+		status, code, err := network.SendWithBody(tc.Method, tc.URL, tc.Body)
 		spinner.Stop()
 
 		label := fmt.Sprintf("%d: %s %s", i+1, strings.ToUpper(tc.Method), tc.URL)
@@ -160,9 +165,26 @@ func handleRunTests(line string) {
 			continue
 		}
 
-		fmt.Println(ui.Blue("PASS " + label + " -> " + status))
-		if err := history.LogAction("run tests " + strings.ToLower(tc.Method) + " " + tc.URL); err != nil {
-			fmt.Println(ui.Red("history: " + err.Error()))
+		// Decision: PASS follows the expected status, not just a delivered
+		// response. When expected_status is omitted the default is any 2xx,
+		// so a 404/500 response prints FAIL instead of a misleading PASS.
+		pass := (tc.ExpectedStatus != 0 && code == tc.ExpectedStatus) ||
+			(tc.ExpectedStatus == 0 && code >= 200 && code < 300)
+		if pass {
+			fmt.Println(ui.Blue("PASS " + label + " -> " + status))
+		} else if tc.ExpectedStatus != 0 {
+			fmt.Println(ui.Red(fmt.Sprintf("FAIL %s -> want status %d got %d (%s)",
+				label, tc.ExpectedStatus, code, status)))
+		} else {
+			fmt.Println(ui.Red(fmt.Sprintf("FAIL %s -> status %d (%s)", label, code, status)))
+		}
+
+		// Decision: only genuinely passing cases are recorded in history,
+		// matching the existing rule that failed cases leave no trace.
+		if pass {
+			if err := history.LogAction("run tests " + strings.ToLower(tc.Method) + " " + tc.URL); err != nil {
+				fmt.Println(ui.Red("history: " + err.Error()))
+			}
 		}
 	}
 }

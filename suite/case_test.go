@@ -44,6 +44,31 @@ func TestParseValid(t *testing.T) {
 	}
 }
 
+func TestParseExpectedStatus(t *testing.T) {
+	data := []byte(`{"tests": [{"method": "get", "url": "https://api.example.com/users/999", "expected_status": 404}]}`)
+	cases, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse() unexpected error: %v", err)
+	}
+	if len(cases) != 1 {
+		t.Fatalf("Parse() returned %d cases ; want 1", len(cases))
+	}
+	if cases[0].ExpectedStatus != 404 {
+		t.Errorf("Parse() ExpectedStatus = %d ; want 404", cases[0].ExpectedStatus)
+	}
+}
+
+func TestParseOmitsExpectedStatusByDefault(t *testing.T) {
+	data := []byte(`{"tests": [{"method": "get", "url": "https://api.example.com/health"}]}`)
+	cases, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse() unexpected error: %v", err)
+	}
+	if cases[0].ExpectedStatus != 0 {
+		t.Errorf("Parse() ExpectedStatus = %d ; want 0 (default = expect any 2xx)", cases[0].ExpectedStatus)
+	}
+}
+
 func TestParseBadJSON(t *testing.T) {
 	_, err := Parse([]byte("not json at all"))
 	if err == nil {

@@ -31,16 +31,21 @@ import (
 // performing real network calls.
 var DefaultClient = &http.Client{Timeout: 10 * time.Second}
 
-// Send performs a single HTTP request with no body.
+// Send performs a single HTTP request with no body and returns the response
+// status line. It ignores the numeric status code, which callers that only
+// need the printable string can do.
 func Send(method, targetURL string) (string, error) {
-	return SendWithBody(method, targetURL, nil)
+	status, _, err := SendWithBody(method, targetURL, nil)
+	return status, err
 }
 
 // SendWithBody performs a single HTTP request with an optional JSON body.
 // When body is non-empty it is sent as-is and the Content-Type header is set
 // to application/json. The response body is drained so the connection can be
-// reused, then the response status line (for example "200 OK") is returned.
-func SendWithBody(method, targetURL string, body []byte) (string, error) {
+// reused, then the response status line (for example "200 OK") and its
+// numeric code (for example 200) are returned. The numeric code is exposed
+// so callers can assert on it instead of parsing the printable line.
+func SendWithBody(method, targetURL string, body []byte) (string, int, error) {
 	var reader io.Reader
 	if len(body) > 0 {
 		reader = bytes.NewReader(body)
@@ -48,7 +53,7 @@ func SendWithBody(method, targetURL string, body []byte) (string, error) {
 
 	req, err := http.NewRequest(strings.ToUpper(method), targetURL, reader)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return "", 0, fmt.Errorf("build request: %w", err)
 	}
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
@@ -56,7 +61,7 @@ func SendWithBody(method, targetURL string, body []byte) (string, error) {
 
 	resp, err := DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("perform request: %w", err)
+		return "", 0, fmt.Errorf("perform request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -64,5 +69,5 @@ func SendWithBody(method, targetURL string, body []byte) (string, error) {
 	// keep-alive connection reuse on the client side.
 	_, _ = io.Copy(io.Discard, resp.Body)
 
-	return resp.Status, nil
+	return resp.Status, resp.StatusCode, nil
 }
