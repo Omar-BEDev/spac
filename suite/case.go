@@ -1,11 +1,14 @@
 // Package suite loads and validates "run -tests" files. A tests file is a
-// JSON list of cases, each describing one HTTP request to execute:
+// JSON document with a top-level "tests" tag holding the list of cases, each
+// describing one HTTP request to execute:
 //
-//	[
-//	  { "method": "post", "url": "https://api.example.com/users",
-//	    "body": { "name": "..." } },
-//	  { "method": "get", "url": "https://api.example.com/health" }
-//	]
+//	{
+//	  "tests": [
+//	    { "method": "post", "url": "https://api.example.com/users",
+//	      "body": { "name": "..." } },
+//	    { "method": "get", "url": "https://api.example.com/health" }
+//	  ]
+//	}
 //
 // This file was generated with the assistance of an artificial intelligence
 // coding agent (opencode). Decisions are commented inline.
@@ -30,25 +33,44 @@ type Case struct {
 
 // Parse validates raw tests-file JSON and returns its cases.
 //
-// Validation fails fast with a clear error on: non-array content, malformed
-// JSON, zero cases, an unsupported method, or a missing URL. Validation of
-// the URL scheme is intentionally left to the network layer, so an
-// unreachable or bad-scheme case surfaces as a FAIL at run time.
+// Validation fails fast with a clear error on: malformed JSON, a missing
+// top-level "tests" tag (so any random object or an empty {} is rejected as
+// "not a tests file"), a wrong-typed "tests" value, zero cases, an
+// unsupported method, or a missing URL. Validation of the URL scheme is
+// intentionally left to the network layer, so an unreachable or bad-scheme
+// case surfaces as a FAIL at run time.
 func Parse(data []byte) ([]Case, error) {
-	var cases []Case
-	if err := json.Unmarshal(data, &cases); err != nil {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse tests file: %w", err)
 	}
-	if len(cases) == 0 {
+
+	rawCases, ok := doc["tests"]
+	if !ok {
+		return nil, fmt.Errorf("file is not a tests file: missing top-level tests tag")
+	}
+
+	var entries []json.RawMessage
+	if err := json.Unmarshal(rawCases, &entries); err != nil {
+		return nil, fmt.Errorf("file is not a tests file: tests tag must be a list of cases")
+	}
+	if len(entries) == 0 {
 		return nil, fmt.Errorf("tests file contains no cases")
 	}
-	for i, tc := range cases {
+
+	cases := make([]Case, 0, len(entries))
+	for i, raw := range entries {
+		var tc Case
+		if err := json.Unmarshal(raw, &tc); err != nil {
+			return nil, fmt.Errorf("case %d: %w", i+1, err)
+		}
 		if !cli.SupportedMethod(strings.ToLower(tc.Method)) {
 			return nil, fmt.Errorf("case %d: unsupported method %q", i+1, tc.Method)
 		}
 		if strings.TrimSpace(tc.URL) == "" {
 			return nil, fmt.Errorf("case %d: missing url", i+1)
 		}
+		cases = append(cases, tc)
 	}
 	return cases, nil
 }

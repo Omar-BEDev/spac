@@ -1,7 +1,7 @@
 // This file was generated with the assistance of an artificial intelligence
 // coding agent (opencode). It covers run -tests file parsing and loading:
-// valid files, malformed JSON, no cases, bad methods, missing URLs, and a
-// missing file on disk.
+// valid files, malformed JSON, missing tests tag, wrong-typed tests tag, no
+// cases, bad methods, missing URLs, and a missing file on disk.
 package suite
 
 import (
@@ -10,11 +10,13 @@ import (
 )
 
 func TestParseValid(t *testing.T) {
-	data := []byte(`[
-		{"method": "get", "url": "https://api.example.com/health"},
-		{"method": "post", "url": "https://api.example.com/users",
-		 "body": {"name": "a", "description": "b"}}
-	]`)
+	data := []byte(`{
+		"tests": [
+			{"method": "get", "url": "https://api.example.com/health"},
+			{"method": "post", "url": "https://api.example.com/users",
+			 "body": {"name": "a", "price": 0}}
+		]
+	}`)
 	cases, err := Parse(data)
 	if err != nil {
 		t.Fatalf("Parse() unexpected error: %v", err)
@@ -40,15 +42,37 @@ func TestParseBadJSON(t *testing.T) {
 	}
 }
 
+func TestParseMissingTestsTag(t *testing.T) {
+	data := []byte(`{}`)
+	_, err := Parse(data)
+	if err == nil {
+		t.Fatal("Parse({}) expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing top-level tests tag") {
+		t.Errorf("Parse({}) error = %q ; want missing-tag message", err)
+	}
+}
+
+func TestParseWrongTypedTestsTag(t *testing.T) {
+	data := []byte(`{"tests": {"method": "get"}}`)
+	_, err := Parse(data)
+	if err == nil {
+		t.Fatal("Parse(wrong-typed tests) expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "tests tag must be a list") {
+		t.Errorf("Parse(wrong-typed tests) error = %q ; want list-required message", err)
+	}
+}
+
 func TestParseEmptyCases(t *testing.T) {
-	_, err := Parse([]byte(`[]`))
+	_, err := Parse([]byte(`{"tests": []}`))
 	if err == nil {
 		t.Fatal("Parse() expected error for empty case list, got nil")
 	}
 }
 
 func TestParseUnsupportedMethod(t *testing.T) {
-	_, err := Parse([]byte(`[{"method": "patch", "url": "https://a.com"}]`))
+	_, err := Parse([]byte(`{"tests": [{"method": "patch", "url": "https://a.com"}]}`))
 	if err == nil {
 		t.Fatal("Parse() expected error for unsupported method, got nil")
 	}
@@ -58,7 +82,7 @@ func TestParseUnsupportedMethod(t *testing.T) {
 }
 
 func TestParseMissingURL(t *testing.T) {
-	_, err := Parse([]byte(`[{"method": "get", "url": "  "}]`))
+	_, err := Parse([]byte(`{"tests": [{"method": "get", "url": "  "}]}`))
 	if err == nil {
 		t.Fatal("Parse() expected error for missing url, got nil")
 	}

@@ -1,6 +1,7 @@
 // This file was generated with the assistance of an artificial intelligence
-// coding agent (opencode). It covers body template loading: missing file,
-// bad JSON, and the POST/PUT body-visibility rule.
+// coding agent (opencode). It covers body template loading: the mandatory
+// "struct" header tag, active-structure selection, missing file, bad JSON,
+// and the POST/PUT body-visibility rule.
 package template
 
 import (
@@ -11,8 +12,10 @@ import (
 )
 
 const validBody = `{
-  "name": "user write new name here",
-  "description": "user write description"
+  "struct": {
+    "product": { "name": "user write new name here", "price": 0 },
+    "user": { "name": "user write new name here", "email": "user write email here" }
+  }
 }`
 
 func writeTemplate(t *testing.T, content string) string {
@@ -30,8 +33,12 @@ func TestLoadValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(%q) unexpected error: %v", path, err)
 	}
-	if !strings.Contains(string(got), "name") {
-		t.Errorf("Load(%q) = %q ; want template content", path, got)
+	// Active structure is the first in sorted name order: product < user.
+	if got.ActiveName != "product" {
+		t.Errorf("Load(%q) ActiveName = %q ; want %q", path, got.ActiveName, "product")
+	}
+	if !strings.Contains(string(got.Body), `"price"`) {
+		t.Errorf("Load(%q) Body = %q ; want the product structure", path, got.Body)
 	}
 }
 
@@ -52,8 +59,44 @@ func TestLoadBadJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load() expected error for bad JSON, got nil")
 	}
-	if !strings.Contains(err.Error(), "not valid JSON") {
-		t.Errorf("Load() error = %q ; want a JSON parse message", err)
+	if !strings.Contains(err.Error(), "parse body template") {
+		t.Errorf("Load() error = %q ; want a parse message", err)
+	}
+}
+
+func TestLoadMissingStructTag(t *testing.T) {
+	path := writeTemplate(t, `{}`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load({}) expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing top-level struct tag") {
+		t.Errorf("Load({}) error = %q ; want missing-struct-tag message", err)
+	}
+	if !strings.Contains(err.Error(), "not a body template") {
+		t.Errorf("Load({}) error = %q ; want a not-a-body-template message", err)
+	}
+}
+
+func TestLoadEmptyStructObject(t *testing.T) {
+	path := writeTemplate(t, `{"struct": {}}`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load({struct: {}}) expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "struct tag is empty") {
+		t.Errorf("Load({struct: {}}) error = %q ; want empty-struct message", err)
+	}
+}
+
+func TestLoadWrongTypedStructTag(t *testing.T) {
+	path := writeTemplate(t, `{"struct": ["product"]}`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load(struct as array) expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "must be a JSON object") {
+		t.Errorf("Load(struct as array) error = %q ; want object-required message", err)
 	}
 }
 

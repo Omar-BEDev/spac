@@ -1,4 +1,12 @@
 {
-  "name": "user write new name here",
-  "description": "user write description"
+  "struct": {
+    "product": {
+      "name": "user write new name here",
+      "price": 0
+    },
+    "user": {
+      "name": "user write new name here",
+      "email": "user write email here"
+    }
+  }
 }
