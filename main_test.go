@@ -16,7 +16,16 @@ import (
 
 	"spac/history"
 	"spac/network"
+	"spac/ui"
 )
+
+// TestMain forces terminal decorations off for every main-package test. This
+// guarantees banner/prompt colors and the spinner never leak ANSI sequences
+// into captured output, so assertions stay about the messages themselves.
+func TestMain(m *testing.M) {
+	ui.SetEnabled(false)
+	os.Exit(m.Run())
+}
 
 // captureStdout runs fn while its prints go to a pipe instead of the real
 // stdout, then returns everything it printed.
@@ -75,6 +84,40 @@ func TestHandleLineUnknownCommand(t *testing.T) {
 	})
 	if !strings.Contains(out, "unknown command") {
 		t.Errorf("expected %q in output, got %q", "unknown command", out)
+	}
+}
+
+// TestHandleLineBlankInput verifies empty and whitespace-only lines are
+// treated as unknown commands rather than crashing or being parsed.
+func TestHandleLineBlankInput(t *testing.T) {
+	for _, line := range []string{"", "   "} {
+		out := captureStdout(t, func() {
+			handleLine(line)
+		})
+		if !strings.Contains(out, "unknown command") {
+			t.Errorf("handleLine(%q) expected %q, got %q", line, "unknown command", out)
+		}
+	}
+}
+
+// TestHandleLineNoAnsiLeak verifies that when decorations are disabled (as
+// TestMain guarantees) neither success nor error paths emit escape sequences.
+func TestHandleLineNoAnsiLeak(t *testing.T) {
+	original := ui.Enabled()
+	ui.SetEnabled(false)
+	defer ui.SetEnabled(original)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`new req "%s"`, server.URL))
+		handleLine("foo")
+	})
+	if strings.Contains(out, "\x1b") {
+		t.Errorf("handleLine leaked ANSI escape sequences: %q", out)
 	}
 }
 
