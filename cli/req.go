@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"unicode"
 )
@@ -41,9 +42,9 @@ func IsReqCommand(input string) bool {
 // The API link is required and may be double-quoted so the shell-style
 // tokenizer keeps it together. Links containing whitespace are rejected
 // because a raw space in an HTTP URL is not something a real server will
-// accept (the server replies 400). The -method flag is optional and
-// defaults to "post" when omitted; each listed method triggers one request
-// and duplicates are executed only once.
+// accept (the server replies 400), and only http/https schemes are allowed.
+// The -method flag is optional and defaults to "post" when omitted; each
+// listed method triggers one request and duplicates are executed only once.
 func ParseReq(input string) (*Request, error) {
 	trimmed := strings.TrimSpace(input)
 	if !IsReqCommand(trimmed) {
@@ -55,28 +56,44 @@ func ParseReq(input string) (*Request, error) {
 		return nil, fmt.Errorf("missing api link")
 	}
 
-	url := unquote(args[2])
-	if url == "" {
+	apiLink := unquote(args[2])
+	if apiLink == "" {
 		return nil, fmt.Errorf("api link cannot be empty")
 	}
 	// Decision: rather than silently percent-encoding the URL (which would
 	// hide user mistakes), fail fast with an explicit error.
-	if containsWhitespace(url) {
+	if containsWhitespace(apiLink) {
 		return nil, fmt.Errorf("api link contains whitespace")
 	}
 
-	req := &Request{URL: url}
+	// Decision: only http and https make sense for the network sender, so
+	// schemes like ftp:// or a missing scheme are rejected here instead of
+	// surfacing as a confusing request error later.
+	parsedURL, err := url.Parse(apiLink)
+	if err != nil {
+		return nil, fmt.Errorf("invalid api link %q: %w", apiLink, err)
+	}
+	switch parsedURL.Scheme {
+	case "http", "https":
+	default:
+		if parsedURL.Scheme == "" {
+			return nil, fmt.Errorf("api link is missing a scheme; prefix it with http:// or https://")
+		}
+		return nil, fmt.Errorf("unsupported api link scheme %q; use http or https", parsedURL.Scheme)
+	}
+
+	req := &Request{URL: apiLink}
 
 	var methods []string
 	haveMethods := false
 	for _, arg := range args[3:] {
-		parsed, ok, err := parseMethodArg(arg)
+		parsedMethods, ok, err := parseMethodArg(arg)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
 			haveMethods = true
-			methods = append(methods, parsed...)
+			methods = append(methods, parsedMethods...)
 		}
 	}
 
