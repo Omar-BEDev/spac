@@ -16,6 +16,7 @@ import (
 
 	"spac/history"
 	"spac/network"
+	"spac/template"
 	"spac/ui"
 )
 
@@ -151,5 +152,210 @@ func TestHandleLineNoLogOnNetworkFailure(t *testing.T) {
 		if strings.Contains(string(content), "new req") {
 			t.Errorf("history log should not contain new req on failure, got %q", content)
 		}
+	}
+}
+
+// okServer returns a minimal httptest server that answers every request with
+// 200 OK. Tests use it so no real network is involved.
+func okServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// setTemplatePath points the shared body-template path at content in a temp
+// file and restores the previous value afterwards.
+func setTemplatePath(t *testing.T, content string) {
+	t.Helper()
+	previous := template.DefaultPath
+	path := filepath.Join(t.TempDir(), "body.json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write template file: %v", err)
+	}
+	template.DefaultPath = path
+	t.Cleanup(func() { template.DefaultPath = previous })
+}
+
+// TemplateBodyForTest is a valid struct-tagged body template used by the
+// body-visibility tests.
+const templateBodyForTest = `{"struct": {"product": {"name": "user write new name here", "price": 0}}}`
+
+// TestHandleLinePostAndPutPrintBody verifies the data-driven body structure is
+// shown for POST and PUT requests.
+func TestHandleLinePostAndPutPrintBody(t *testing.T) {
+	setTemplatePath(t, templateBodyForTest)
+
+	server := okServer(t)
+	for _, method := range []string{"post", "put"} {
+		out := captureStdout(t, func() {
+			handleLine(fmt.Sprintf(`new req "%s" -method(%s)`, server.URL, method))
+		})
+		if !strings.Contains(out, "body structure") {
+			t.Errorf("%s: expected %q in output, got %q", method, "body structure", out)
+		}
+		if !strings.Contains(out, "user write new name here") {
+			t.Errorf("%s: expected template placeholder in output, got %q", method, out)
+		}
+	}
+}
+
+// TestHandleLineGetAndDeleteNoBody verifies GET and DELETE print no body
+// structure even when a template exists.
+func TestHandleLineGetAndDeleteNoBody(t *testing.T) {
+	setTemplatePath(t, templateBodyForTest)
+
+	server := okServer(t)
+	for _, method := range []string{"get", "delete"} {
+		out := captureStdout(t, func() {
+			handleLine(fmt.Sprintf(`new req "%s" -method(%s)`, server.URL, method))
+		})
+		if strings.Contains(out, "body structure") {
+			t.Errorf("%s: did not expect body structure in output, got %q", method, out)
+		}
+	}
+}
+
+// TestHandleLineRunTestsSample runs a real sample tests file (generated in a
+// temp dir against a local server) and verifies every case passes and is
+// logged.
+func TestHandleLineRunTestsSample(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "history.log")
+	history.SetLogFilePath(logPath)
+
+	server := okServer(t)
+	sample := fmt.Sprintf(`{
+		"tests": [
+			{"method": "get", "url": "%s/health"},
+			{"method": "post", "url": "%s/users", "body": {"name": "a"}},
+			{"method": "put", "url": "%s/users/1", "body": {"name": "b"}},
+			{"method": "delete", "url": "%s/users/1"}
+		]
+	}`, server.URL, server.URL, server.URL, server.URL)
+
+	path := filepath.Join(t.TempDir(), "tests.json")
+	if err := os.WriteFile(path, []byte(sample), 0o644); err != nil {
+		t.Fatalf("write tests file: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`run -tests "%s"`, path))
+	})
+
+	if got := strings.Count(out, "PASS"); got != 4 {
+		t.Errorf("expected 4 PASS lines, got %d in %q", got, out)
+	}
+	for _, method := range []string{"GET", "POST", "PUT", "DELETE"} {
+		if !strings.Contains(out, method) {
+			t.Errorf("expected %s case in output, got %q", method, out)
+		}
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("failed to read history log: %v", err)
+	}
+	for _, action := range []string{"run tests get", "run tests post", "run tests put", "run tests delete"} {
+		if !strings.Contains(string(content), action) {
+			t.Errorf("history log missing %q ; got %q", action, content)
+		}
+	}
+}
+
+// TestHandleLineRunTestsMissingPath verifies a clear error when the path is
+// omitted.
+func TestHandleLineRunTestsMissingPath(t *testing.T) {
+	out := captureStdout(t, func() {
+		handleLine("run -tests")
+	})
+	if !strings.Contains(out, "missing tests file path") {
+		t.Errorf("expected missing-path error, got %q", out)
+	}
+}
+
+// TestHandleLineRunTestsBadPath verifies a clear error when the file does not
+// exist.
+func TestHandleLineRunTestsBadPath(t *testing.T) {
+	out := captureStdout(t, func() {
+		handleLine(`run -tests "no-such-tests.json"`)
+	})
+	if !strings.Contains(out, "read tests file") {
+		t.Errorf("expected read error, got %q", out)
+	}
+}
+
+// TestHandleLineRunTestsBadJSON verifies a clear error for malformed test
+// content.
+func TestHandleLineRunTestsBadJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tests.json")
+	if err := os.WriteFile(path, []byte("this is not json"), 0o644); err != nil {
+		t.Fatalf("write tests file: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`run -tests "%s"`, path))
+	})
+	if !strings.Contains(out, "parse tests file") {
+		t.Errorf("expected parse error, got %q", out)
+	}
+}
+
+// TestHandleLineRunTestsMissingTag verifies the explicit "not a tests file"
+// error surfaces for a JSON document without a top-level tests tag.
+func TestHandleLineRunTestsMissingTag(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tests.json")
+	if err := os.WriteFile(path, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write tests file: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`run -tests "%s"`, path))
+	})
+	if !strings.Contains(out, "file is not a tests file") {
+		t.Errorf("expected not-a-tests-file error, got %q", out)
+	}
+}
+
+// TestHandleLinePostMissingStructTag verifies the explicit "not a body
+// template" error surfaces for a POST request with a template lacking the
+// struct header.
+func TestHandleLinePostMissingStructTag(t *testing.T) {
+	setTemplatePath(t, `{"name": "user write new name here"}`)
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`new req "%s" -method(post)`, okServer(t).URL))
+	})
+	if !strings.Contains(out, "not a body template") {
+		t.Errorf("expected not-a-body-template error, got %q", out)
+	}
+}
+
+// TestHandleLineRunTestsFailure verifies failing cases print FAIL and are not
+// recorded in history.
+func TestHandleLineRunTestsFailure(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "history.log")
+	history.SetLogFilePath(logPath)
+
+	original := network.DefaultClient
+	network.DefaultClient = &http.Client{Transport: failingTransport{}}
+	t.Cleanup(func() { network.DefaultClient = original })
+
+	path := filepath.Join(t.TempDir(), "tests.json")
+	if err := os.WriteFile(path, []byte(`{"tests": [{"method": "get", "url": "http://x.invalid/"}]}`), 0o644); err != nil {
+		t.Fatalf("write tests file: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`run -tests "%s"`, path))
+	})
+	if !strings.Contains(out, "FAIL") {
+		t.Errorf("expected FAIL in output, got %q", out)
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err == nil && strings.Contains(string(content), "run tests") {
+		t.Errorf("history should be empty for failed cases, got %q", content)
 	}
 }

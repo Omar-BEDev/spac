@@ -9,6 +9,8 @@ import (
 	"spac/cli"
 	"spac/history"
 	"spac/network"
+	"spac/suite"
+	"spac/template"
 	"spac/ui"
 )
 
@@ -35,7 +37,7 @@ func main() {
 	fmt.Print(ui.Blue(banner))
 	fmt.Println("spac ", version, " - interactive HTTP request console")
 	fmt.Println(`Type new req "<api link>" [-method(post,get,put,delete)] and press Enter.`)
-	fmt.Println(`Command can be repeated with different links or methods. Type "exit" to quit.`)
+	fmt.Println(`Type run -tests "<tests.json>" to execute a tests file. Type "exit" to quit.`)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -59,11 +61,20 @@ func main() {
 
 // handleLine runs a single (non-empty) user input line.
 func handleLine(line string) {
-	if !cli.IsReqCommand(line) {
+	switch {
+	case cli.IsRunTestsCommand(line):
+		handleRunTests(line)
+	case cli.IsReqCommand(line):
+		handleNewReq(line)
+	default:
 		fmt.Println(ui.Red("unknown command: " + line))
-		return
 	}
+}
 
+// handleNewReq runs a "new req" command: one request per listed method, a
+// spinner while each request is in flight, and (for POST/PUT only) the JSON
+// body template loaded from templates/body.json.
+func handleNewReq(line string) {
 	req, err := cli.ParseReq(line)
 	if err != nil {
 		fmt.Println(ui.Red("parse error: " + err.Error()))
@@ -75,9 +86,21 @@ func handleLine(line string) {
 	// small spinner animates while the request is in flight and is cleared
 	// before the result line is printed (no-op when not a terminal).
 	for _, method := range req.Methods {
+		// Decision: the body is data-driven. For POST and PUT the template is
+		// loaded from templates/body.json, displayed to the user so they know
+		// what to fill in, and serialized verbatim as the request body. The
+		// structure is fixed to the JSON file: no extra fields can be added.
+		var body []byte
+		if method == "post" || method == "put" {
+			body, err = template.LoadForMethod(method, template.DefaultPath)
+			if err != nil {
+				fmt.Println(ui.Red("template: " + err.Error()))
+			}
+		}
+
 		spinner := ui.NewSpinner(os.Stdout)
 		spinner.Start()
-		status, err := network.Send(method, req.URL)
+		status, err := network.SendWithBody(method, req.URL, body)
 		spinner.Stop()
 
 		if err != nil {
@@ -86,8 +109,47 @@ func handleLine(line string) {
 		}
 
 		fmt.Println(ui.Blue(strings.ToUpper(method) + " " + req.URL + " -> " + status))
+		if len(body) > 0 {
+			fmt.Println(ui.Blue("body structure:"))
+			fmt.Println(ui.Blue(string(body)))
+		}
 
 		if err := history.LogAction("new req " + strings.ToUpper(method) + " " + req.URL); err != nil {
+			fmt.Println(ui.Red("history: " + err.Error()))
+		}
+	}
+}
+
+// handleRunTests runs every case in a "run -tests" file, reusing the same
+// spinner and history logging as new req. A case passes when its request
+// executes and returns a response; the status line is printed alongside.
+func handleRunTests(line string) {
+	path, err := cli.ParseRunTests(line)
+	if err != nil {
+		fmt.Println(ui.Red("run -tests: " + err.Error()))
+		return
+	}
+
+	cases, err := suite.Load(path)
+	if err != nil {
+		fmt.Println(ui.Red("run -tests: " + err.Error()))
+		return
+	}
+
+	for i, tc := range cases {
+		spinner := ui.NewSpinner(os.Stdout)
+		spinner.Start()
+		status, err := network.SendWithBody(tc.Method, tc.URL, tc.Body)
+		spinner.Stop()
+
+		label := fmt.Sprintf("%d: %s %s", i+1, strings.ToUpper(tc.Method), tc.URL)
+		if err != nil {
+			fmt.Println(ui.Red("FAIL " + label + " -> " + err.Error()))
+			continue
+		}
+
+		fmt.Println(ui.Blue("PASS " + label + " -> " + status))
+		if err := history.LogAction("run tests " + strings.ToLower(tc.Method) + " " + tc.URL); err != nil {
 			fmt.Println(ui.Red("history: " + err.Error()))
 		}
 	}
