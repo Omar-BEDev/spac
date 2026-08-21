@@ -17,9 +17,9 @@ limitations under the License.
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -52,14 +52,33 @@ func main() {
 	fmt.Println(`Type new req "<api link>" [-method(post,get,put,delete,patch,head,options)] [-header("Name: Value")] [-H "Name: Value"] [-struct(name)] and press Enter.`)
 	fmt.Println(`Type run -tests "<tests.json>" to execute a tests file. Type "exit" to quit.`)
 
-	scanner := bufio.NewScanner(os.Stdin)
+	reader, err := newLineReader()
+	if err != nil {
+		fmt.Println(ui.Red("input: " + err.Error()))
+		os.Exit(1)
+	}
+	defer reader.Close()
+
+	runConsole(reader)
+}
+
+// runConsole drives the read-eval loop until the user exits or the input
+// stream ends. All input goes through the lineReader abstraction, so the
+// same loop serves both the interactive readline editor and the piped
+// fallback.
+func runConsole(in lineReader) {
 	for {
-		fmt.Print(ui.Blue(">> "))
-		if !scanner.Scan() {
-			break
+		raw, err := in.ReadLine()
+		if err == io.EOF {
+			fmt.Println("bye")
+			return
+		}
+		if err != nil {
+			fmt.Println(ui.Red("input: " + err.Error()))
+			return
 		}
 
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(raw)
 		switch {
 		case line == "":
 			continue
@@ -67,6 +86,7 @@ func main() {
 			fmt.Println("bye")
 			return
 		default:
+			in.AddHistory(line)
 			handleLine(line)
 		}
 	}
