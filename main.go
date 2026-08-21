@@ -18,6 +18,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -48,7 +49,7 @@ func main() {
 	// piped runs stay plain and portable.
 	fmt.Print(ui.Blue(banner))
 	fmt.Println("spac ", version, " - interactive HTTP request console")
-	fmt.Println(`Type new req "<api link>" [-method(post,get,put,delete)] and press Enter.`)
+	fmt.Println(`Type new req "<api link>" [-method(post,get,put,delete,patch,head,options)] [-header("Name: Value")] [-H "Name: Value"] [-struct(name)] and press Enter.`)
 	fmt.Println(`Type run -tests "<tests.json>" to execute a tests file. Type "exit" to quit.`)
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -98,13 +99,15 @@ func handleNewReq(line string) {
 	// small spinner animates while the request is in flight and is cleared
 	// before the result line is printed (no-op when not a terminal).
 	for _, method := range req.Methods {
-		// Decision: the body is data-driven. For POST and PUT the template is
-		// loaded from templates/body.json, displayed to the user so they know
-		// what to fill in, and serialized verbatim as the request body. The
-		// structure is fixed to the JSON file: no extra fields can be added.
+		// Decision: the body is data-driven. For methods that carry a body
+		// (POST, PUT, PATCH) the template is loaded from templates/body.json
+		// - optionally a named structure via -struct(name) -, displayed to
+		// the user so they know what to fill in, and serialized verbatim as
+		// the request body. The structure is fixed to the JSON file: no
+		// extra fields can be added.
 		var body []byte
-		if method == "post" || method == "put" {
-			body, err = template.LoadForMethod(method, template.DefaultPath)
+		if method == "post" || method == "put" || method == "patch" {
+			body, err = template.LoadForMethod(method, template.DefaultPath, req.StructName)
 			if err != nil {
 				fmt.Println(ui.Red("template: " + err.Error()))
 			}
@@ -112,7 +115,7 @@ func handleNewReq(line string) {
 
 		spinner := ui.NewSpinner(os.Stdout)
 		spinner.Start()
-		status, _, err := network.SendWithBody(method, req.URL, body)
+		resp, err := network.SendWithBody(method, req.URL, req.Headers, body)
 		spinner.Stop()
 
 		if err != nil {
@@ -120,16 +123,51 @@ func handleNewReq(line string) {
 			continue
 		}
 
-		fmt.Println(ui.Blue(strings.ToUpper(method) + " " + req.URL + " -> " + status))
+		fmt.Println(ui.Blue(strings.ToUpper(method) + " " + req.URL + " -> " + resp.Status))
 		if len(body) > 0 {
 			fmt.Println(ui.Blue("body structure:"))
 			fmt.Println(ui.Blue(string(body)))
 		}
 
+		printResponse(resp)
+
 		if err := history.LogAction("new req " + strings.ToUpper(method) + " " + req.URL); err != nil {
 			fmt.Println(ui.Red("history: " + err.Error()))
 		}
 	}
+}
+
+// printResponse shows the response body to the user and, when present, the
+// Content-Type header that explains how to read it. JSON bodies are
+// pretty-printed with 2-space indentation; anything else is printed as-is.
+func printResponse(resp *network.Response) {
+	if len(resp.Body) == 0 {
+		return
+	}
+	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
+		fmt.Println(ui.Blue("content-type: " + contentType))
+	}
+	if formatted, ok := prettyJSON(resp.Body); ok {
+		fmt.Println(ui.Blue("response body:"))
+		fmt.Println(ui.Blue(formatted))
+		return
+	}
+	fmt.Println(ui.Blue("response body:"))
+	fmt.Println(ui.Blue(string(resp.Body)))
+}
+
+// prettyJSON re-indents a JSON document when valid; ok is false for any
+// non-JSON body so it can be printed verbatim.
+func prettyJSON(raw []byte) (string, bool) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", false
+	}
+	formatted, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return "", false
+	}
+	return string(formatted), true
 }
 
 // handleRunTests runs every case in a "run -tests" file, reusing the same
@@ -156,7 +194,7 @@ func handleRunTests(line string) {
 	for i, tc := range cases {
 		spinner := ui.NewSpinner(os.Stdout)
 		spinner.Start()
-		status, code, err := network.SendWithBody(tc.Method, tc.URL, tc.Body)
+		resp, err := network.SendWithBody(tc.Method, tc.URL, nil, tc.Body)
 		spinner.Stop()
 
 		label := fmt.Sprintf("%d: %s %s", i+1, strings.ToUpper(tc.Method), tc.URL)
@@ -164,6 +202,8 @@ func handleRunTests(line string) {
 			fmt.Println(ui.Red("FAIL " + label + " -> " + err.Error()))
 			continue
 		}
+
+		status, code := resp.Status, resp.Code
 
 		// Decision: PASS follows the expected status, not just a delivered
 		// response. When expected_status is omitted the default is any 2xx,
