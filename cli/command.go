@@ -28,6 +28,9 @@ var commands = map[string]string{
 	"get":     Method,
 	"put":     Method,
 	"delete":  Method,
+	"patch":   Method,
+	"head":    Method,
+	"options": Method,
 }
 
 func IsAvailableCommand(name string) bool {
@@ -39,8 +42,9 @@ func IsAvailableCommand(name string) bool {
 }
 
 // SupportedMethod reports whether name is one of the HTTP methods the console
-// can execute (post, get, put, delete). The check is case-sensitive the same
-// way the command map is; callers lower-case before asking when needed.
+// can execute (post, get, put, delete, patch, head, options). The check is
+// case-sensitive the same way the command map is; callers lower-case before
+// asking when needed.
 func SupportedMethod(name string) bool {
 	return allowedMethods[name]
 }
