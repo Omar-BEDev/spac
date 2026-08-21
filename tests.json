@@ -23,6 +23,11 @@
     {
       "method": "delete",
       "url": "https://httpbin.org/delete"
+    },
+    {
+      "method": "get",
+      "url": "https://httpbin.org/status/404",
+      "expected_status": 404
     }
   ]
 }

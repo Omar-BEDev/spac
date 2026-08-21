@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"spac/history"
@@ -369,5 +370,212 @@ func TestHandleLineRunTestsFailure(t *testing.T) {
 	content, err := os.ReadFile(logPath)
 	if err == nil && strings.Contains(string(content), "run tests") {
 		t.Errorf("history should be empty for failed cases, got %q", content)
+	}
+}
+
+// statusServer returns a minimal httptest server that answers every request
+// with the given status code, so non-2xx responses can be produced without a
+// real network call.
+func statusServer(t *testing.T, code int) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(code)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// TestHandleLineRunTestsWrongStatus verifies a case without expected_status
+// that receives a non-2xx response (404) prints FAIL, shows the actual code,
+// and is not counted in the PASS total.
+func TestHandleLineRunTestsWrongStatus(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "history.log")
+	history.SetLogFilePath(logPath)
+
+	server := statusServer(t, http.StatusNotFound)
+	path := filepath.Join(t.TempDir(), "tests.json")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"tests": [{"method": "get", "url": "%s/not-found"}]}`, server.URL)), 0o644); err != nil {
+		t.Fatalf("write tests file: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`run -tests "%s"`, path))
+	})
+	if !strings.Contains(out, "FAIL") {
+		t.Errorf("expected FAIL for non-2xx status, got %q", out)
+	}
+	if !strings.Contains(out, "404") {
+		t.Errorf("expected actual status 404 in output, got %q", out)
+	}
+	if got := strings.Count(out, "PASS"); got != 0 {
+		t.Errorf("wrong-status case must not count in PASS total, got %d PASS in %q", got, out)
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err == nil && strings.Contains(string(content), "run tests") {
+		t.Errorf("history should be empty for a wrong-status case, got %q", content)
+	}
+}
+
+// TestHandleLineRunTestsExpectedStatusMatches verifies a case with an
+// explicit expected_status set to a non-2xx value passes when the server
+// returns exactly that status, proving intentional non-2xx checks work.
+func TestHandleLineRunTestsExpectedStatusMatches(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "history.log")
+	history.SetLogFilePath(logPath)
+
+	server := statusServer(t, http.StatusNotFound)
+	path := filepath.Join(t.TempDir(), "tests.json")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"tests": [{"method": "get", "url": "%s/should-not-exist", "expected_status": 404}]}`, server.URL)), 0o644); err != nil {
+		t.Fatalf("write tests file: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`run -tests "%s"`, path))
+	})
+	if !strings.Contains(out, "PASS") {
+		t.Errorf("expected PASS for intentional 404 check, got %q", out)
+	}
+	if !strings.Contains(out, "404") {
+		t.Errorf("expected 404 in output, got %q", out)
+	}
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("failed to read history log: %v", err)
+	}
+	if !strings.Contains(string(content), "run tests get") {
+		t.Errorf("history log missing passing case, got %q", content)
+	}
+}
+
+// TestHandleLineRunTestsExpectedStatusMismatch verifies a case whose explicit
+// expected_status does not match the response prints a FAIL showing both the
+// wanted and the actual code.
+func TestHandleLineRunTestsExpectedStatusMismatch(t *testing.T) {
+	server := okServer(t)
+	path := filepath.Join(t.TempDir(), "tests.json")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"tests": [{"method": "get", "url": "%s/x", "expected_status": 404}]}`, server.URL)), 0o644); err != nil {
+		t.Fatalf("write tests file: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`run -tests "%s"`, path))
+	})
+	if !strings.Contains(out, "FAIL") {
+		t.Errorf("expected FAIL on expected_status mismatch, got %q", out)
+	}
+	if !strings.Contains(out, "want status 404 got 200") {
+		t.Errorf("expected want/got mismatch message, got %q", out)
+	}
+}
+
+// jsonServer returns a server that echoes a JSON document and records the
+// incoming Authorization header, so response-body display and custom-header
+// behaviour can be verified together.
+func jsonServer(t *testing.T) (*httptest.Server, *[]string) {
+	t.Helper()
+	var auths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(server.Close)
+	return server, &auths
+}
+
+// TestHandleLinePrintsResponseBody verifies the pretty-printed JSON response
+// body and its Content-Type are shown after a request.
+func TestHandleLinePrintsResponseBody(t *testing.T) {
+	server, _ := jsonServer(t)
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`new req "%s" -method(get)`, server.URL))
+	})
+	for _, want := range []string{"response body", `"ok": true`, "content-type: application/json"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output, got %q", want, out)
+		}
+	}
+}
+
+// TestHandleLineSendsCustomHeaders verifies -header(...) and -H flags reach
+// the outgoing request.
+func TestHandleLineSendsCustomHeaders(t *testing.T) {
+	server, auths := jsonServer(t)
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`new req "%s" -method(get) -header("Authorization: Bearer abc") -H "X-Trace: 9"`, server.URL))
+	})
+	if len(*auths) != 1 || (*auths)[0] != "Bearer abc" {
+		t.Errorf("server Authorization = %v ; want [Bearer abc]", *auths)
+	}
+	if strings.Contains(out, "request failed") {
+		t.Errorf("unexpected failure output: %q", out)
+	}
+}
+
+// TestHandleLineStructSelector verifies -struct(name) picks the requested
+// template structure as the request body.
+func TestHandleLineStructSelector(t *testing.T) {
+	setTemplatePath(t, `{"struct": {"product": {"price": 0}, "user": {"email": "u@x.io"}}}`)
+
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`new req "%s" -method(post) -struct(user)`, server.URL))
+	})
+	if len(bodies) != 1 || !strings.Contains(bodies[0], "u@x.io") {
+		t.Errorf("server received body %v ; want the user structure", bodies)
+	}
+	if strings.Contains(out, "template:") {
+		t.Errorf("unexpected template error output: %q", out)
+	}
+}
+
+// TestHandleLineUnknownStructSelector verifies a clear error when
+// -struct(name) names a structure that does not exist.
+func TestHandleLineUnknownStructSelector(t *testing.T) {
+	setTemplatePath(t, `{"struct": {"product": {"price": 0}}}`)
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`new req "%s" -method(post) -struct(cart)`, okServer(t).URL))
+	})
+	if !strings.Contains(out, `struct "cart" does not exist`) {
+		t.Errorf("expected missing-struct error, got %q", out)
+	}
+}
+
+// TestHandleLineExtendedMethods verifies PATCH, HEAD and OPTIONS run through
+// the console like the original methods.
+func TestHandleLineExtendedMethods(t *testing.T) {
+	var methods []string
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	out := captureStdout(t, func() {
+		handleLine(fmt.Sprintf(`new req "%s" -method(patch,head,options)`, server.URL))
+	})
+	if got := strings.Count(out, "-> 200 OK"); got != 3 {
+		t.Errorf("expected 3 result lines, got %d in %q", got, out)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "PATCH,HEAD,OPTIONS" {
+		t.Errorf("server methods = %v ; want [PATCH HEAD OPTIONS]", methods)
 	}
 }

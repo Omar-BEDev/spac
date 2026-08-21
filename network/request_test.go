@@ -119,12 +119,19 @@ func TestSendWithBodySendsJSON(t *testing.T) {
 	DefaultClient = &http.Client{}
 	t.Cleanup(func() { DefaultClient = original })
 
-	status, err := SendWithBody("post", server.URL, []byte(wantBody))
+	resp, err := SendWithBody("post", server.URL, nil, []byte(wantBody))
+	if err != nil {
+		t.Fatalf("SendWithBody() unexpected error: %v", err)
+	}
+	status, code := resp.Status, resp.Code
 	if err != nil {
 		t.Fatalf("SendWithBody() unexpected error: %v", err)
 	}
 	if status != "200 OK" {
 		t.Errorf("SendWithBody() status = %q ; want %q", status, "200 OK")
+	}
+	if code != http.StatusOK {
+		t.Errorf("SendWithBody() code = %d ; want %d", code, http.StatusOK)
 	}
 
 	mu.Lock()
@@ -134,5 +141,162 @@ func TestSendWithBodySendsJSON(t *testing.T) {
 	}
 	if gotCT != "application/json" {
 		t.Errorf("SendWithBody() Content-Type = %q ; want %q", gotCT, "application/json")
+	}
+}
+
+// TestSendWithBodyReturnsNumericCode verifies the numeric status code is
+// returned alongside the printable status line for a non-2xx response too,
+// without being reported as a transport error.
+func TestSendWithBodyReturnsNumericCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/not-found" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	original := DefaultClient
+	DefaultClient = &http.Client{}
+	t.Cleanup(func() { DefaultClient = original })
+
+	resp, err := SendWithBody("get", server.URL+"/not-found", nil, nil)
+	if err != nil {
+		t.Fatalf("SendWithBody() unexpected error on 404 response: %v", err)
+	}
+	status, code := resp.Status, resp.Code
+	if status != "404 Not Found" {
+		t.Errorf("SendWithBody() status = %q ; want %q", status, "404 Not Found")
+	}
+	if code != http.StatusNotFound {
+		t.Errorf("SendWithBody() code = %d ; want %d", code, http.StatusNotFound)
+	}
+
+	resp, err = SendWithBody("post", server.URL, nil, []byte(`{"name":"a"}`))
+	if err != nil {
+		t.Fatalf("SendWithBody() unexpected error on 200 response: %v", err)
+	}
+	status, code = resp.Status, resp.Code
+	if status != "200 OK" || code != http.StatusOK {
+		t.Errorf("SendWithBody() = (%q, %d) ; want (\"200 OK\", %d)", status, code, http.StatusOK)
+	}
+}
+
+// TestSendWithBodyReturnsBodyAndHeaders verifies the full response is
+// surfaced: raw body bytes and the response headers alongside the status.
+func TestSendWithBodyReturnsBodyAndHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Test", "yes")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	original := DefaultClient
+	DefaultClient = &http.Client{}
+	t.Cleanup(func() { DefaultClient = original })
+
+	resp, err := SendWithBody("get", server.URL, nil, nil)
+	if err != nil {
+		t.Fatalf("SendWithBody() unexpected error: %v", err)
+	}
+	if string(resp.Body) != `{"ok":true}` {
+		t.Errorf("SendWithBody() body = %q ; want %q", resp.Body, `{"ok":true}`)
+	}
+	if got := resp.Header.Get("X-Test"); got != "yes" {
+		t.Errorf("SendWithBody() X-Test header = %q ; want %q", got, "yes")
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("SendWithBody() Content-Type = %q ; want %q", got, "application/json")
+	}
+}
+
+// TestSendWithBodyCustomHeaders verifies custom headers are placed on the
+// outgoing request and that an explicit caller Content-Type wins over the
+// default application/json.
+func TestSendWithBodyCustomHeaders(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		gotAuth  string
+		gotCT    string
+		gotExtra string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotAuth = r.Header.Get("Authorization")
+		gotCT = r.Header.Get("Content-Type")
+		gotExtra = r.Header.Get("X-Custom")
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	original := DefaultClient
+	DefaultClient = &http.Client{}
+	t.Cleanup(func() { DefaultClient = original })
+
+	headers := map[string]string{
+		"Authorization": "Bearer token123",
+		"Content-Type":  "application/merge-patch+json",
+		"X-Custom":      "42",
+	}
+	resp, err := SendWithBody("patch", server.URL, headers, []byte(`{"a":1}`))
+	if err != nil {
+		t.Fatalf("SendWithBody() unexpected error: %v", err)
+	}
+	if resp.Code != http.StatusOK {
+		t.Errorf("SendWithBody() code = %d ; want %d", resp.Code, http.StatusOK)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotAuth != "Bearer token123" {
+		t.Errorf("server Authorization = %q ; want %q", gotAuth, "Bearer token123")
+	}
+	if gotCT != "application/merge-patch+json" {
+		t.Errorf("server Content-Type = %q ; want caller value to win", gotCT)
+	}
+	if gotExtra != "42" {
+		t.Errorf("server X-Custom = %q ; want %q", gotExtra, "42")
+	}
+}
+
+// TestSendMethodsExtended verifies the newly supported methods reach the
+// server with their exact wire names.
+func TestSendMethodsExtended(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		methods []string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	original := DefaultClient
+	DefaultClient = &http.Client{}
+	t.Cleanup(func() { DefaultClient = original })
+
+	wantMethods := []string{"PATCH", "HEAD", "OPTIONS"}
+	for _, m := range wantMethods {
+		if _, err := Send(m, server.URL); err != nil {
+			t.Fatalf("Send(%q) unexpected error: %v", m, err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(methods) != len(wantMethods) {
+		t.Fatalf("server received %d requests ; want %d", len(methods), len(wantMethods))
+	}
+	for i, m := range methods {
+		if m != wantMethods[i] {
+			t.Errorf("server request %d method = %q ; want %q", i, m, wantMethods[i])
+		}
 	}
 }
