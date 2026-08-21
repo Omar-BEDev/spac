@@ -18,6 +18,7 @@ package cli
 
 import (
 	"fmt"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"unicode"
@@ -27,15 +28,25 @@ import (
 type Request struct {
 	URL     string
 	Methods []string
+	// Headers maps canonical header names to values supplied via
+	// -header(...) or -H flags. It is nil when none were given.
+	Headers map[string]string
+	// StructName is the body-template structure selected with
+	// -struct(name). It is empty when the flag was omitted and the
+	// template loader falls back to its default structure.
+	StructName string
 }
 
 // allowedMethods lists the HTTP methods accepted by the -method(-) flag.
 // Decision: keep the set small and aligned with the existing command map.
 var allowedMethods = map[string]bool{
-	"post":   true,
-	"get":    true,
-	"put":    true,
-	"delete": true,
+	"post":    true,
+	"get":     true,
+	"put":     true,
+	"delete":  true,
+	"patch":   true,
+	"head":    true,
+	"options": true,
 }
 
 // IsReqCommand reports whether input is a "new req" command, ignoring
@@ -49,7 +60,9 @@ func IsReqCommand(input string) bool {
 
 // ParseReq parses a "new req" command line. The grammar is:
 //
-//	spac>> new req "<api link>" [-method(post,get,put,delete)]
+//	spac>> new req "<api link>" [-method(post,get,put,delete,...)]
+//	                                   [-header("Name: Value")]... [-H "Name: Value"]...
+//	                                   [-struct(name)]
 //
 // The API link is required and may be double-quoted so the shell-style
 // tokenizer keeps it together. Links containing whitespace are rejected
@@ -57,6 +70,9 @@ func IsReqCommand(input string) bool {
 // accept (the server replies 400), and only http/https schemes are allowed.
 // The -method flag is optional and defaults to "post" when omitted; each
 // listed method triggers one request and duplicates are executed only once.
+// The -header and -H flags may repeat; later values for the same header name
+// override earlier ones. The -struct flag selects a named structure from the
+// body template; when omitted the template default structure is used.
 func ParseReq(input string) (*Request, error) {
 	trimmed := strings.TrimSpace(input)
 	if !IsReqCommand(trimmed) {
@@ -98,7 +114,12 @@ func ParseReq(input string) (*Request, error) {
 
 	var methods []string
 	haveMethods := false
-	for _, arg := range args[3:] {
+	// Decision: the loop walks by index so the -H flag can consume its value
+	// from the following token, while inline flags (-method, -header,
+	// -struct) are handled inside a single token.
+	for i := 0; i < len(args[3:]); i++ {
+		arg := args[3+i]
+
 		parsedMethods, ok, err := parseMethodArg(arg)
 		if err != nil {
 			return nil, err
@@ -106,6 +127,25 @@ func ParseReq(input string) (*Request, error) {
 		if ok {
 			haveMethods = true
 			methods = append(methods, parsedMethods...)
+			continue
+		}
+
+		name, value, consumedNext, ok, err := parseHeaderArg(arg, args, 3+i)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			if req.Headers == nil {
+				req.Headers = make(map[string]string)
+			}
+			req.Headers[name] = value
+			i += consumedNext
+			continue
+		}
+
+		structName, ok := parseStructArg(arg)
+		if ok {
+			req.StructName = structName
 		}
 	}
 
@@ -206,6 +246,57 @@ func parseMethods(raw []string) ([]string, error) {
 		return nil, fmt.Errorf("no methods provided")
 	}
 	return methods, nil
+}
+
+// parseHeaderArg recognises a "-header(\"Name: Value\")" flag (inline) or a
+// "-H \"Name: Value\"" pair (flag followed by its value token). It returns
+// the canonical header name, the value and how many extra tokens were
+// consumed (0 for inline, 1 for -H). ok is false when the token is not a
+// header flag at all.
+func parseHeaderArg(arg string, args []string, index int) (name, value string, consumedNext int, ok bool, err error) {
+	lower := strings.ToLower(arg)
+	switch {
+	case strings.HasPrefix(lower, "-header(") && strings.HasSuffix(arg, ")"):
+		inner := unquote(arg[len("-header(") : len(arg)-1])
+		name, value, err = splitHeader(inner)
+		return name, value, 0, true, err
+	case lower == "-h":
+		if index+1 >= len(args) {
+			return "", "", 0, true, fmt.Errorf("-H requires a \"Name: Value\" argument")
+		}
+		inner := unquote(args[index+1])
+		name, value, err = splitHeader(inner)
+		return name, value, 1, true, err
+	default:
+		return "", "", 0, false, nil
+	}
+}
+
+// splitHeader splits a "Name: Value" token at its first colon, trims the
+// surrounding whitespace from both parts and validates that both are
+// non-empty. The name is returned in canonical HTTP form so "content-type"
+// and "Content-Type" address the same header.
+func splitHeader(raw string) (string, string, error) {
+	name, value, found := strings.Cut(raw, ":")
+	if !found {
+		return "", "", fmt.Errorf("invalid header %q: expected \"Name: Value\"", raw)
+	}
+	name = strings.TrimSpace(name)
+	value = strings.TrimSpace(value)
+	if name == "" || value == "" {
+		return "", "", fmt.Errorf("invalid header %q: name and value are required", raw)
+	}
+	return textproto.CanonicalMIMEHeaderKey(name), value, nil
+}
+
+// parseStructArg recognises a "-struct(name)" flag and returns the selected
+// structure name. ok is false when the token is not a struct flag.
+func parseStructArg(arg string) (string, bool) {
+	lower := strings.ToLower(arg)
+	if !strings.HasPrefix(lower, "-struct(") || !strings.HasSuffix(arg, ")") {
+		return "", false
+	}
+	return strings.TrimSpace(arg[len("-struct(") : len(arg)-1]), true
 }
 
 // dedupe removes duplicate strings preserving the first occurrence order.

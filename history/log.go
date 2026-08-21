@@ -33,24 +33,27 @@ const (
 // variable instead of a constant so tests can point it to a temporary
 // location without touching the real log.
 //
-// Decision: relying on the executable directory keeps the log close to
-// the binary, which is predictable for CLI usage.
+// Decision: the log lives in the user's own config directory (with a home
+// directory fallback) instead of next to the executable. When the binary is
+// installed in a system path such as /usr/local/bin the executable directory
+// is not writable by normal users, so the previous approach broke logging.
 var defaultLogFilePath = func() string {
-	execPath, err := os.Executable()
-	if err != nil {
-		// Fall back to the current working directory if the executable
-		// path cannot be resolved.
-		return historyFileName
+	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+		return filepath.Join(dir, "spac", historyFileName)
 	}
-	return filepath.Join(filepath.Dir(execPath), historyFileName)
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".spac", historyFileName)
+	}
+	// Last resort: the current working directory.
+	return historyFileName
 }()
 
 var logFilePath = defaultLogFilePath
 
 // SetLogFilePath overrides the history log file location so tests in other
 // packages (for example main) can point the log at a temporary file. Passing
-// an empty path restores the default location derived from the executable
-// directory.
+// an empty path restores the default location derived from the user's
+// config (or home) directory.
 //
 // Decision: exported on purpose as a test seam; the real location logic stays
 // unexported in defaultLogFilePath.
@@ -73,6 +76,15 @@ type LogEntry struct {
 //
 // It returns an error if the log file cannot be opened or written to.
 func LogAction(action string) error {
+	// Decision: the parent directory (for example ~/.config/spac) may not
+	// exist on a fresh install, so it is created on demand before opening
+	// the log file.
+	if dir := filepath.Dir(logFilePath); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create history log directory: %w", err)
+		}
+	}
+
 	currentDate := time.Now().Format("2006/01/02")
 	entry := fmt.Sprintf("%s %s\n", currentDate, action)
 

@@ -47,12 +47,38 @@ import (
 // when present, is kept as raw JSON so it is sent exactly as written.
 // ExpectedStatus is optional: when set (non-zero) the request is expected to
 // return exactly that HTTP status; when omitted the default expectation is
-// any 2xx response.
+// any 2xx response. It can be written either as "expected_status" or with
+// the shorter "status" alias.
 type Case struct {
 	Method         string          `json:"method"`
 	URL            string          `json:"url"`
 	Body           json.RawMessage `json:"body,omitempty"`
 	ExpectedStatus int             `json:"expected_status,omitempty"`
+}
+
+// UnmarshalJSON decodes a case, accepting the expected status under either
+// the "expected_status" key or its shorter "status" alias. When both are
+// present "expected_status" wins.
+//
+// Decision: the alias support lives in a custom unmarshaler instead of a
+// second struct field so the rest of the code keeps one canonical field.
+func (c *Case) UnmarshalJSON(data []byte) error {
+	type plain Case
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*c = Case(p)
+
+	var alias struct {
+		Status int `json:"status"`
+	}
+	if err := json.Unmarshal(data, &alias); err == nil && alias.Status != 0 {
+		if c.ExpectedStatus == 0 {
+			c.ExpectedStatus = alias.Status
+		}
+	}
+	return nil
 }
 
 // Parse validates raw tests-file JSON and returns its cases.

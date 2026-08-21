@@ -17,6 +17,7 @@ limitations under the License.
 package suite
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -109,7 +110,7 @@ func TestParseEmptyCases(t *testing.T) {
 }
 
 func TestParseUnsupportedMethod(t *testing.T) {
-	_, err := Parse([]byte(`{"tests": [{"method": "patch", "url": "https://a.com"}]}`))
+	_, err := Parse([]byte(`{"tests": [{"method": "trace", "url": "https://a.com"}]}`))
 	if err == nil {
 		t.Fatal("Parse() expected error for unsupported method, got nil")
 	}
@@ -135,5 +136,47 @@ func TestLoadMissingFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "read tests file") {
 		t.Errorf("Load() error = %q ; want it to mention reading the file", err)
+	}
+}
+
+// TestParseStatusAlias verifies the shorter "status" key is accepted as an
+// alias of expected_status.
+func TestParseStatusAlias(t *testing.T) {
+	cases, err := Parse([]byte(`{"tests": [{"method": "get", "url": "https://a.com", "status": 201}]}`))
+	if err != nil {
+		t.Fatalf("Parse() unexpected error: %v", err)
+	}
+	if len(cases) != 1 {
+		t.Fatalf("Parse() returned %d cases ; want 1", len(cases))
+	}
+	if cases[0].ExpectedStatus != 201 {
+		t.Errorf("Parse() ExpectedStatus = %d ; want 201", cases[0].ExpectedStatus)
+	}
+}
+
+// TestParseExpectedStatusWins verifies that when both keys are present the
+// explicit expected_status value takes precedence over the alias.
+func TestParseExpectedStatusWins(t *testing.T) {
+	cases, err := Parse([]byte(`{"tests": [{"method": "get", "url": "https://a.com", "expected_status": 204, "status": 500}]}`))
+	if err != nil {
+		t.Fatalf("Parse() unexpected error: %v", err)
+	}
+	if cases[0].ExpectedStatus != 204 {
+		t.Errorf("Parse() ExpectedStatus = %d ; want 204 (expected_status must win)", cases[0].ExpectedStatus)
+	}
+}
+
+// TestParseExtendedMethods verifies PATCH, HEAD and OPTIONS are accepted in
+// tests files now that the console supports them.
+func TestParseExtendedMethods(t *testing.T) {
+	for _, m := range []string{"patch", "head", "options"} {
+		data := fmt.Sprintf(`{"tests": [{"method": "%s", "url": "https://a.com"}]}`, m)
+		cases, err := Parse([]byte(data))
+		if err != nil {
+			t.Fatalf("Parse(method %s) unexpected error: %v", m, err)
+		}
+		if !strings.EqualFold(cases[0].Method, m) {
+			t.Errorf("Parse(method %s) got method %q", m, cases[0].Method)
+		}
 	}
 }

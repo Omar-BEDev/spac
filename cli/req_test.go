@@ -17,6 +17,7 @@ limitations under the License.
 package cli
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -166,7 +167,7 @@ func TestParseReq(t *testing.T) {
 		},
 		{
 			name:    "unsupported method",
-			input:   `new req "https://a.com" -method(patch)`,
+			input:   `new req "https://a.com" -method(trace)`,
 			wantErr: true,
 		},
 		{
@@ -202,5 +203,127 @@ func TestParseReq(t *testing.T) {
 				t.Errorf("ParseReq(%q) Methods = %v ; want %v", tt.input, got.Methods, tt.wantMeths)
 			}
 		})
+	}
+}
+
+func TestParseReqHeadersAndStruct(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           string
+		wantHeaders     map[string]string
+		wantStruct      string
+		wantMethods     []string
+		wantErr         bool
+		wantErrContains string
+	}{
+		{
+			name:        "inline header flag",
+			input:       `new req "https://a.com" -header("Authorization: Bearer tok")`,
+			wantHeaders: map[string]string{"Authorization": "Bearer tok"},
+		},
+		{
+			name:        "short header flag",
+			input:       `new req "https://a.com" -H "X-Api-Key: abc"`,
+			wantHeaders: map[string]string{"X-Api-Key": "abc"},
+		},
+		{
+			name:  "multiple headers",
+			input: `new req "https://a.com" -header("Accept: application/json") -H "X-Trace: 7"`,
+			wantHeaders: map[string]string{
+				"Accept":  "application/json",
+				"X-Trace": "7",
+			},
+		},
+		{
+			name:        "canonical header name",
+			input:       `new req "https://a.com" -header("content-type: text/plain")`,
+			wantHeaders: map[string]string{"Content-Type": "text/plain"},
+		},
+		{
+			name:            "inline header missing colon",
+			input:           `new req "https://a.com" -header("just-a-name")`,
+			wantErr:         true,
+			wantErrContains: `invalid header`,
+		},
+		{
+			name:            "short header without value",
+			input:           `new req "https://a.com" -H`,
+			wantErr:         true,
+			wantErrContains: `-H requires`,
+		},
+		{
+			name:            "header empty value",
+			input:           `new req "https://a.com" -H "X-Empty:"`,
+			wantErr:         true,
+			wantErrContains: `invalid header`,
+		},
+		{
+			name:       "struct selector",
+			input:      `new req "https://a.com" -struct(user)`,
+			wantStruct: "user",
+		},
+		{
+			name:        "struct selector with methods",
+			input:       `new req "https://a.com" -method(post,patch) -struct(product)`,
+			wantStruct:  "product",
+			wantMethods: []string{"post", "patch"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseReq(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseReq(%q) expected error, got %+v", tt.input, got)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Errorf("ParseReq(%q) error = %q ; want it to contain %q", tt.input, err, tt.wantErrContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseReq(%q) unexpected error: %v", tt.input, err)
+			}
+			if len(got.Headers) != len(tt.wantHeaders) {
+				t.Fatalf("ParseReq(%q) headers = %v ; want %v", tt.input, got.Headers, tt.wantHeaders)
+			}
+			for name, value := range tt.wantHeaders {
+				if got.Headers[name] != value {
+					t.Errorf("ParseReq(%q) header %q = %q ; want %q", tt.input, name, got.Headers[name], value)
+				}
+			}
+			if got.StructName != tt.wantStruct {
+				t.Errorf("ParseReq(%q) StructName = %q ; want %q", tt.input, got.StructName, tt.wantStruct)
+			}
+			// Decision: when a case does not list methods the parser
+			// defaults to POST, so nil expectations mean the default.
+			want := tt.wantMethods
+			if want == nil {
+				want = []string{"post"}
+			}
+			if len(got.Methods) != len(want) {
+				t.Fatalf("ParseReq(%q) methods = %v ; want %v", tt.input, got.Methods, want)
+			}
+			for i, m := range want {
+				if got.Methods[i] != m {
+					t.Errorf("ParseReq(%q) method %d = %q ; want %q", tt.input, i, got.Methods[i], m)
+				}
+			}
+		})
+	}
+}
+
+// TestParseReqExtendedMethods verifies the newly supported methods parse and
+// normalise to lowercase.
+func TestParseReqExtendedMethods(t *testing.T) {
+	for _, m := range []string{"patch", "head", "options"} {
+		got, err := ParseReq(fmt.Sprintf(`new req "https://a.com" -method(%s)`, m))
+		if err != nil {
+			t.Fatalf("ParseReq(method %s) unexpected error: %v", m, err)
+		}
+		if len(got.Methods) != 1 || got.Methods[0] != m {
+			t.Errorf("ParseReq(method %s) methods = %v ; want [%s]", m, got.Methods, m)
+		}
 	}
 }
