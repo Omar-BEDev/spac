@@ -53,7 +53,9 @@ type StructFile struct {
 
 // Load reads and validates a body template file. The top-level "struct" tag
 // is mandatory: without it the file is rejected as "not a body template".
-func Load(path string) (*StructFile, error) {
+// When name is empty the first structure in sorted name order is selected;
+// when name is given it must exist in the file or an error is returned.
+func Load(path, name string) (*StructFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read body template %q: %w", path, err)
@@ -77,16 +79,26 @@ func Load(path string) (*StructFile, error) {
 		return nil, fmt.Errorf("body template %q: struct tag is empty", path)
 	}
 
-	names := make([]string, 0, len(structures))
-	for name := range structures {
-		names = append(names, name)
+	// Decision: without an explicit -struct(name) selector the first
+	// structure in sorted name order is the "active" one, so the pick stays
+	// deterministic instead of relying on Go map iteration order. With a
+	// selector the requested structure wins and a missing name fails fast.
+	var active string
+	if name == "" {
+		names := make([]string, 0, len(structures))
+		for candidate := range structures {
+			names = append(names, candidate)
+		}
+		sort.Strings(names)
+		active = names[0]
+	} else {
+		raw, exists := structures[name]
+		if !exists {
+			return nil, fmt.Errorf("body template %q: struct %q does not exist", path, name)
+		}
+		active = name
+		structures = map[string]json.RawMessage{name: raw}
 	}
-	sort.Strings(names)
-
-	// Decision: the first structure in sorted name order is the "active" one.
-	// The console has no selector syntax yet, so a deterministic pick is
-	// preferable to relying on Go map iteration order.
-	active := names[0]
 	raw := structures[active]
 
 	// Normalize the body: re-marshal with 2-space indentation so the body is
@@ -105,13 +117,16 @@ func Load(path string) (*StructFile, error) {
 }
 
 // LoadForMethod returns the active body-template structure bytes only for
-// POST and PUT requests. GET and DELETE carry no body (nil, nil). If the
-// template file cannot be loaded for a POST/PUT request the error is returned
-// so the caller can surface it instead of sending a silently wrong request.
-func LoadForMethod(method, path string) ([]byte, error) {
+// methods that carry a body (POST, PUT, PATCH). GET, DELETE, HEAD and
+// OPTIONS carry no body (nil, nil). name selects a specific structure from
+// the template file; an empty name uses the default structure. If the
+// template file cannot be loaded for a body-carrying request the error is
+// returned so the caller can surface it instead of sending a silently wrong
+// request.
+func LoadForMethod(method, path, name string) ([]byte, error) {
 	switch strings.ToLower(method) {
-	case "post", "put":
-		sf, err := Load(path)
+	case "post", "put", "patch":
+		sf, err := Load(path, name)
 		if err != nil {
 			return nil, err
 		}
